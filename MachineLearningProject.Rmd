@@ -1,0 +1,162 @@
+---
+title: "Predicting Barbell Lift Activity From Sensor Data"
+author: "sbsundog"
+date: "May 24, 2016"
+output: html_document
+---
+```{r setup, include=FALSE, }
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE, message=FALSE)
+```
+
+###Executive Summary
+
+This study implements a random forest model to predict the quality of barbell lifts performed in 20 test cases. After reducing the variable pool and training the model, the model correctly classified 20 out of 20 test validation cases. 
+
+
+####Obtaining and Preparing Source Data for Barbell Model Building
+
+The barbell lifting data contains 19622 observations and 160 variables from a study by Ugulino and Others - Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. An additional twenty observations are to be classified based on the model constructed through this exercise. These twenty observations are the validation data set.
+
+"Summary" data appears periodically throughout the training cases and have values for variables that the "non summary"" data does not. The two types of observations are separated. The summary data are not used in subsequent analysis. 
+
+Many variables within the non summary observations are missing data, or they are coded "NA". Appropriate steps were taken to remove them. Observation identity information in columns 1-7 were also removed since they are not needed to build the model.
+
+The net result is a dataset with 53 variables that will be tested for how well they fit a random forest model. The test data to be validated as a a final test of the model fitting is also reduced to 53 variables. 
+```{r }
+rm(list=ls())
+fileUrl <- "c:/Users/John/Documents/R/Downloads/pml-training.csv"       ##barbell lifts data file downloaded for project
+bblifts.data <- read.csv(fileUrl, sep=",", header = TRUE)                ##read barbell lifts data
+bblifts.data.subset <- subset(bblifts.data, bblifts.data$new_window == "yes") ##put "summary" data in its own pile
+bblifts.data.subset.no <- subset(bblifts.data, bblifts.data$new_window == "no") ##put detailed data into its own pile
+
+bblifts.data.reduced <- bblifts.data.subset.no[colSums(!is.na(bblifts.data.subset.no)) > 0] #remove NA's
+bblifts.data.reduced <- bblifts.data.reduced[,colSums(bblifts.data.reduced != "") > 0] #remove coumns with spaces
+bblifts.data.reduced <- bblifts.data.reduced[,c(8:60)]                      #remove identifier, non model important type data
+
+fileUrl2 <- "c:/Users/John/Documents/R/Downloads/pml-testing.csv"          #barbell lifts TEST data file downloaded for project
+bblifts.test.data <- read.csv(fileUrl2, sep=",", header = TRUE)            ##read barbell lifts TEST data
+bblifts.test.data.reduced <- bblifts.test.data[colSums(!is.na(bblifts.test.data)) > 0] #remove NA's
+bblifts.test.data.reduced <- bblifts.test.data.reduced[,colSums(bblifts.test.data.reduced != "") > 0] #remove columns with spaces
+bblifts.test.data.reduced <- bblifts.test.data.reduced[,c(8:60)]  #remove identifier, non model type data
+
+
+```
+####Partitioning Data into Training and Testing Sets
+
+Training and testing data sets are established using the caret package.
+
+```{r }
+library(caret)
+set.seed(1743)
+inTrain <- createDataPartition(y=bblifts.data.reduced$classe, p=.75, list=FALSE)  #preliminary but standard caret setup
+training <- bblifts.data.reduced[inTrain,]                                        #training data
+testing <- bblifts.data.reduced[-inTrain,]                                        #testing data
+
+
+```
+
+####Setting Up Multi Core Processing of Random Forest Model
+
+Run times for single core processing were excessive. A multi core environment (parallel processing) was introduced to address the run time problem. 
+
+Because of execessive run times even with the multi core setup, five-fold cross validaton, rather than 10, with repetition was used in training the model. The smaller number of folds makes no practical difference in the highly accurate results.
+
+```{r cache=TRUE}
+
+library(parallel)
+library(doParallel)
+
+tr.control.options <- trainControl(method="repeatedcv", number=5, repeats=5, allowParallel=TRUE)
+
+x <- training[,-53]          
+y <- training[,53]
+
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+        
+bblifts.parallel.fit <-  train(x,y, data=training, method="rf", trControl=tr.control.options)   
+
+stopCluster(cluster)
+
+
+```
+### Model Results 
+
+
+####Accuracy
+The model fit indicates that whether we include 2 or 27 predictors, the result is almost the same accuracy. Given the exceptional closeness in accuracy, parsimony favors the smaller number. The software favors 27. As shown in the Appendix, 7 variables should work just fine.
+```{r }
+
+bblifts.parallel.fit
+```
+#### In Sample Error Rate
+
+```{r }
+
+ins.er <- predict(bblifts.parallel.fit, training)
+confusionMatrix(ins.er, training$classe)
+
+```
+#### Variable Importance
+
+The first seven variaboles have the most impact. The gap between the seventh and the eigth is apparent.
+
+```{r }
+
+varImp(bblifts.parallel.fit)
+
+```
+
+#### Out of Sample Error Rate
+
+Accuracy is a measure of the out of sample error rate, which is how well the model handles a new data sample. A 99%+ rate is indicative that the model will predict the twenty validation cases without dififculty. 
+
+```{r }
+oos.er <- predict(bblifts.parallel.fit, testing)
+confusionMatrix(oos.er, testing$classe)
+```
+####Predictions for Observation Data
+
+The stated goal for the project is to predict twenty observations against the fitted model. As expected, the model predicted all twenty validation cases. And so, upon submission:
+
+  Passed
+  
+  20/20 points earned (100%)
+  
+  Quiz passed!
+  
+```{r }
+predict.twenty <- predict(bblifts.parallel.fit, bblifts.test.data.reduced)
+predict.twenty
+
+```
+
+###  Appendix
+
+The expected number of variables for a classification model using random forests should be the square root of the number of predictors. The following plot and the results from three models indicate agreement with the theoretical value, or 7.
+
+Cv Error Reduction As Number of Variables Increase
+
+```{r pressure, echo=FALSE, cache=TRUE}
+check.cv.rf <- rfcv(x, y)
+with(check.cv.rf, plot(n.var, error.cv, log="x", type="o", lwd=2, main="CV Error Reduction", xlab="Number of variables", ylab="CV Error"))
+
+```
+
+Corresponding to the above plot: the following models were run using a 53 variable model.
+
+bag.c53.18 <- randomForest(classe ~ ., data = training.c53, mtry = 18, importance=TRUE)
+bag.c53.18  ### 0.54% oob estimate of error rate
+bag.c53.7 <- randomForest(classe ~ ., data = training.c53, mtry = 7, importance=TRUE)
+bag.c53.7  ####.49% oob error rate
+bag.c53.5 <- randomForest(classe ~ ., data = training.c53, mtry = 5, importance=TRUE)
+bag.c53.5  ###oob 0.62% oob error rate
+
+Results from Model Fit
+```{r  echo=FALSE, cache=TRUE}
+
+ plot(bblifts.parallel.fit$results)
+
+```
+
